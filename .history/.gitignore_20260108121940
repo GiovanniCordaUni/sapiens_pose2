@@ -1,0 +1,18 @@
+# outputs / data
+data/frames/
+data/input/
+data/output/
+
+# model weights
+weights/
+sapiens_host/**/checkpoints/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# misc
+.DS_Store

@@ -1,0 +1,72 @@
+# ==============================================================================
+# Keypoint Configuration
+# ==============================================================================
+# Mapping from model output keypoints to standard formats
+
+# ------------------------------------------------------------------------------
+# COCO 17 Keypoints
+# ------------------------------------------------------------------------------
+# Standard COCO keypoint order:
+# 0: nose, 1: left_eye, 2: right_eye, 3: left_ear, 4: right_ear
+# 5: left_shoulder, 6: right_shoulder, 7: left_elbow, 8: right_elbow
+# 9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip
+# 13: left_knee, 14: right_knee, 15: left_ankle, 16: right_ankle
+
+coco17:
+  # Indices to select from model output (e.g., Sapiens 308 -> COCO 17)
+  # TODO: Update these indices based on actual Sapiens keypoint mapping
+  #indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 16, 17, 18, 19]
+  
+  # Keypoint names for reference
+  names:
+    - nose
+    - left_eye
+    - right_eye
+    - left_ear
+    - right_ear
+    - left_shoulder
+    - right_shoulder
+    - left_elbow
+    - right_elbow
+    - left_wrist
+    - right_wrist
+    - left_hip
+    - right_hip
+    - left_knee
+    - right_knee
+    - left_ankle
+    - right_ankle
+    
+  # Skeleton edges (pairs of keypoint indices)
+  edges:
+    # Arms
+    - [5, 7]   # left_shoulder - left_elbow
+    - [7, 9]   # left_elbow - left_wrist
+    - [6, 8]   # right_shoulder - right_elbow
+    - [8, 10]  # right_elbow - right_wrist
+    # Torso
+    - [5, 6]   # left_shoulder - right_shoulder
+    - [5, 11]  # left_shoulder - left_hip
+    - [6, 12]  # right_shoulder - right_hip
+    - [11, 12] # left_hip - right_hip
+    # Legs
+    - [11, 13] # left_hip - left_knee
+    - [13, 15] # left_knee - left_ankle
+    - [12, 14] # right_hip - right_knee
+    - [14, 16] # right_knee - right_ankle
+    # Face
+    - [0, 1]   # nose - left_eye
+    - [0, 2]   # nose - right_eye
+    - [1, 3]   # left_eye - left_ear
+    - [2, 4]   # right_eye - right_ear
+
+# ------------------------------------------------------------------------------
+# Goliath 308 to COCO 17 Mapping (Sapiens model)
+# ------------------------------------------------------------------------------
+# This is the mapping from Sapiens Goliath 308 keypoints to COCO 17 format
+# Source: https://github.com/facebookresearch/sapiens
+goliath308_to_coco17:
+  # TODO: Fill in the correct indices from Sapiens documentation
+  # Example mapping (needs verification):
+  indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
