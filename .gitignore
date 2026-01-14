@@ -37,8 +37,7 @@ sapiens_host/
 *.bin
 
 # Dati
-data/input/
-data/output/
+data/
 
 # Logs
 *.log
