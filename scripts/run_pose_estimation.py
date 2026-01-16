@@ -101,6 +101,9 @@ def process_single_video(
     bbox_color: tuple[int, int, int],
     skip_video_output: bool,
     quiet: bool,
+    stabilize_keypoints: bool = True,
+    stabilizer_min_cutoff: float = 1.5,
+    stabilizer_beta: float = 0.01,
 ) -> dict:
     """
     Processa un singolo video e salva gli output nella cartella del soggetto.
@@ -144,6 +147,9 @@ def process_single_video(
         skeleton_color=skeleton_color,
         bbox_color=bbox_color,
         show_progress=not quiet,
+        stabilize_keypoints=stabilize_keypoints,
+        stabilizer_min_cutoff=stabilizer_min_cutoff,
+        stabilizer_beta=stabilizer_beta,
     )
     
     return stats
@@ -275,8 +281,9 @@ def main():
     yolo_weights = args.yolo_weights or (
         PROJECT_ROOT / config["models"]["yolo"]["weights"]
     )
+    ckpt = Path(config["models"]["sapiens"]["checkpoint"])
     sapiens_checkpoint = args.sapiens_checkpoint or (
-        sapiens_host / config["models"]["sapiens"]["checkpoint"]
+        ckpt if ckpt.is_absolute() else sapiens_host / ckpt
     )
     
     if not sapiens_checkpoint.exists():
@@ -303,6 +310,12 @@ def main():
     keypoint_color = tuple(viz_config["keypoint_color"])
     skeleton_color = tuple(viz_config["skeleton_color"])
     bbox_color = tuple(viz_config["bbox_color"])
+    
+    # Parametri di stabilizzazione keypoints
+    stab_config = config.get("stabilization", {})
+    stabilize_keypoints = stab_config.get("enabled", True)
+    stabilizer_min_cutoff = stab_config.get("min_cutoff", 1.5)
+    stabilizer_beta = stab_config.get("beta", 0.01)
     
     # Indici keypoint (mappatura identità per COCO 17 nativo)
     keypoint_indices = kp_config["coco17"]["indices"]
@@ -413,6 +426,9 @@ def main():
                 bbox_color=bbox_color,
                 skip_video_output=args.no_video,
                 quiet=args.quiet,
+                stabilize_keypoints=stabilize_keypoints,
+                stabilizer_min_cutoff=stabilizer_min_cutoff,
+                stabilizer_beta=stabilizer_beta,
             )
             
             total_stats["videos_processed"] += 1
