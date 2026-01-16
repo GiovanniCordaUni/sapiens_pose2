@@ -100,7 +100,11 @@ class OneEuroFilter:
 
 class KeypointStabilizer:
     """
-    Stabilizzatore per keypoints 2D usando One-Euro Filter.
+    Stabilizzatore per keypoints 2D usando One-Euro Filter + Hold.
+    
+    Combina due tecniche:
+    1. Hold: se conf < threshold, mantiene la posizione precedente
+    2. One-Euro: smooth sui keypoints validi per ridurre jitter
     
     Mantiene un filtro separato per ogni keypoint (x, y).
     """
@@ -111,6 +115,9 @@ class KeypointStabilizer:
         min_cutoff: float = 1.5,
         beta: float = 0.01,
         d_cutoff: float = 1.0,
+        use_one_euro: bool = True,
+        use_hold: bool = True,
+        hold_decay: float = 0.95,
     ):
         """
         Args:
@@ -118,15 +125,26 @@ class KeypointStabilizer:
             min_cutoff: Cutoff minimo (più basso = più smooth)
             beta: Reattività ai movimenti rapidi (più alto = più reattivo)
             d_cutoff: Cutoff per la derivata
+            use_one_euro: Abilita filtro One-Euro per smoothing
+            use_hold: Abilita hold per keypoints con bassa confidenza
+            hold_decay: Decay della confidenza quando si usa hold (0.9-0.99)
         """
         self.num_keypoints = num_keypoints
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
+        self.use_one_euro = use_one_euro
+        self.use_hold = use_hold
+        self.hold_decay = hold_decay
         
-        # Filtri per x e y di ogni keypoint
+        # Filtri One-Euro per x e y di ogni keypoint
         self.filters_x: list[OneEuroFilter] = []
         self.filters_y: list[OneEuroFilter] = []
+        
+        # Buffer per hold
+        self.prev_keypoints: np.ndarray | None = None
+        self.prev_scores: np.ndarray | None = None
+        
         self._init_filters()
     
     def _init_filters(self):
@@ -148,36 +166,68 @@ class KeypointStabilizer:
         confidence_threshold: float = 0.3,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Filtra i keypoints per ridurre il jitter.
+        Filtra i keypoints per ridurre il jitter e mantenere stabilità.
+        
+        Logica:
+        1. Se conf >= threshold: aggiorna posizione (+ smooth se One-Euro attivo)
+        2. Se conf < threshold e hold attivo: usa posizione precedente
         
         Args:
-            keypoints: Array (N, 2) di coordinate (x, y) per ogni keypoint
-            scores: Array (N,) di confidenze
+            keypoints: Array (N, 2) delle coordinate x, y
+            scores: Array (N,) delle confidenze
             timestamp: Timestamp del frame in secondi
-            confidence_threshold: Soglia minima per applicare il filtro
+            confidence_threshold: Soglia minima per considerare il keypoint valido
             
         Returns:
-            Tuple di (keypoints filtrati, scores)
+            Tuple (keypoints_filtrati, scores_filtrati)
         """
-        filtered_keypoints = keypoints.copy()
-        num_kpts = min(len(keypoints), self.num_keypoints)
+        # Prima chiamata: inizializza buffer
+        if self.prev_keypoints is None:
+            self.prev_keypoints = keypoints.copy()
+            self.prev_scores = scores.copy()
+            # Non applico One-Euro al primo frame
+            return keypoints.copy(), scores.copy()
+        
+        filtered_kpts = keypoints.copy()
+        filtered_scores = scores.copy()
+        num_kpts = min(len(scores), self.num_keypoints)
         
         for i in range(num_kpts):
-            x, y = keypoints[i]
-            conf = scores[i]
-            
-            # Se la confidenza è troppo bassa, resetta il filtro
-            if conf < confidence_threshold:
-                self.filters_x[i].reset()
-                self.filters_y[i].reset()
-                continue
-            
-            # Applica il filtro
-            filtered_keypoints[i, 0] = self.filters_x[i].filter(x, timestamp)
-            filtered_keypoints[i, 1] = self.filters_y[i].filter(y, timestamp)
+            if scores[i] >= confidence_threshold:
+                # Confidenza alta → aggiorna (con o senza smooth)
+                if self.use_one_euro:
+                    filtered_kpts[i, 0] = self.filters_x[i].filter(keypoints[i, 0], timestamp)
+                    filtered_kpts[i, 1] = self.filters_y[i].filter(keypoints[i, 1], timestamp)
+                # else: mantieni keypoints originali (già in filtered_kpts)
+                
+                # Aggiorna buffer
+                self.prev_keypoints[i] = filtered_kpts[i]
+                self.prev_scores[i] = scores[i]
+                
+            elif self.use_hold and self.prev_scores[i] >= confidence_threshold:
+                # Confidenza bassa ma hold attivo e precedente valido
+                filtered_kpts[i] = self.prev_keypoints[i]
+                filtered_scores[i] = self.prev_scores[i] * self.hold_decay
+                
+                # Aggiorna buffer con score decayed
+                self.prev_scores[i] = filtered_scores[i]
+                
+                # Resetta filtro One-Euro per questo keypoint
+                # (evita salti quando torna visibile)
+                if self.use_one_euro:
+                    self.filters_x[i].reset()
+                    self.filters_y[i].reset()
+            else:
+                # Confidenza bassa e nessun hold valido
+                # Resetta filtro
+                if self.use_one_euro:
+                    self.filters_x[i].reset()
+                    self.filters_y[i].reset()
         
-        return filtered_keypoints, scores
+        return filtered_kpts, filtered_scores
     
     def reset(self):
-        """Resetta tutti i filtri (es. per nuova persona/video)."""
+        """Resetta tutti i filtri e buffer (es. per nuova persona/video)."""
         self._init_filters()
+        self.prev_keypoints = None
+        self.prev_scores = None

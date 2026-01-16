@@ -19,11 +19,12 @@ from ..viz.draw import draw_pose_overlay
 from ..detection.person_detector import clamp_box_xyxy, add_padding_xyxy
 from ..filters.one_euro_filter import KeypointStabilizer
 
-# Exponential moving average per stabilizzare i bounding box sulla persona
-def ema_box(prev: list[float] | None, curr: list[float], alpha: float = 0.2) -> list[float]:
-    if prev is None:
-        return [float(x) for x in curr]
-    return [(1 - alpha) * float(prev[i]) + alpha * float(curr[i]) for i in range(4)]
+# # NOTA: La funzione EMA potrebbe causare ritardi indesiderati nei bounding box sulla persona.
+# # Exponential moving average per stabilizzare i bounding box sulla persona
+# def ema_box(prev: list[float] | None, curr: list[float], alpha: float = 0.2) -> list[float]:
+#     if prev is None:
+#         return [float(x) for x in curr]
+#     return [(1 - alpha) * float(prev[i]) + alpha * float(curr[i]) for i in range(4)]
 
 def run_pose_pipeline(
     video_path: str | Path,
@@ -44,6 +45,9 @@ def run_pose_pipeline(
     stabilize_keypoints: bool = True,
     stabilizer_min_cutoff: float = 1.5,
     stabilizer_beta: float = 0.01,
+    stabilizer_use_one_euro: bool = True,
+    stabilizer_use_hold: bool = True,
+    stabilizer_hold_decay: float = 0.95,
 ) -> dict[str, Any]:
     """
     Esegue la pipeline completa di stima della posa su un video.
@@ -96,6 +100,9 @@ def run_pose_pipeline(
             num_keypoints=len(keypoint_indices),
             min_cutoff=stabilizer_min_cutoff,
             beta=stabilizer_beta,
+            use_one_euro=stabilizer_use_one_euro,
+            use_hold=stabilizer_use_hold,
+            hold_decay=stabilizer_hold_decay,
         )
     
     with VideoReader(video_path) as reader:
@@ -148,11 +155,13 @@ def run_pose_pipeline(
                         stats["frames_no_person"] += 1
                         continue
 
-                    smooth_box = ema_box(prev_box, box_xyxy, alpha=0.2)
+                    # smooth_box = ema_box(prev_box, box_xyxy, alpha=0.2)
 
-                    prev_box = smooth_box
+                    # prev_box = smooth_box
+                    prev_box = box_xyxy
 
-                    box_xyxy = clamp_box_xyxy(smooth_box, W, H)
+                    #box_xyxy = clamp_box_xyxy(smooth_box, W, H)
+                    box_xyxy = clamp_box_xyxy(box_xyxy, W, H)
                     # box_xyxy = add_padding_xyxy(box_xyxy, W, H, padding_ratio=box_padding) # opzionale se si vuole padding sul box persona
                     x1, y1, x2, y2 = box_xyxy
                     

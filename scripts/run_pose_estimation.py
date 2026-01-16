@@ -104,6 +104,9 @@ def process_single_video(
     stabilize_keypoints: bool = True,
     stabilizer_min_cutoff: float = 1.5,
     stabilizer_beta: float = 0.01,
+    stabilizer_use_one_euro: bool = True,
+    stabilizer_use_hold: bool = True,
+    stabilizer_hold_decay: float = 0.95,
 ) -> dict:
     """
     Processa un singolo video e salva gli output nella cartella del soggetto.
@@ -150,6 +153,9 @@ def process_single_video(
         stabilize_keypoints=stabilize_keypoints,
         stabilizer_min_cutoff=stabilizer_min_cutoff,
         stabilizer_beta=stabilizer_beta,
+        stabilizer_use_one_euro=stabilizer_use_one_euro,
+        stabilizer_use_hold=stabilizer_use_hold,
+        stabilizer_hold_decay=stabilizer_hold_decay,
     )
     
     return stats
@@ -316,6 +322,9 @@ def main():
     stabilize_keypoints = stab_config.get("enabled", True)
     stabilizer_min_cutoff = stab_config.get("min_cutoff", 1.5)
     stabilizer_beta = stab_config.get("beta", 0.01)
+    stabilizer_use_one_euro = stab_config.get("use_one_euro", True)
+    stabilizer_use_hold = stab_config.get("use_hold", True)
+    stabilizer_hold_decay = stab_config.get("hold_decay", 0.95)
     
     # Indici keypoint (mappatura identità per COCO 17 nativo)
     keypoint_indices = kp_config["coco17"]["indices"]
@@ -429,6 +438,9 @@ def main():
                 stabilize_keypoints=stabilize_keypoints,
                 stabilizer_min_cutoff=stabilizer_min_cutoff,
                 stabilizer_beta=stabilizer_beta,
+                stabilizer_use_one_euro=stabilizer_use_one_euro,
+                stabilizer_use_hold=stabilizer_use_hold,
+                stabilizer_hold_decay=stabilizer_hold_decay,
             )
             
             total_stats["videos_processed"] += 1

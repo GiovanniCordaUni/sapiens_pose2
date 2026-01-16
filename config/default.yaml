@@ -24,7 +24,7 @@ models:
     
   sapiens:
     # COCO 17 native checkpoint - output diretto 17 keypoints, nessun mapping richiesto
-    # checpoint: "pose/checkpoints/sapiens_0.6b/sapiens_0.6b_coco_best_coco_AP_812_torchscript.pt2"
+    # checkpoint: "pose/checkpoints/sapiens_0.6b/sapiens_0.6b_coco_best_coco_AP_812_torchscript.pt2"
     # checkpoint: "pose/checkpoints/sapiens_1b/sapiens_1b_coco_best_coco_AP_821_torchscript.pt2"
     checkpoint: "pose/checkpoints/sapiens_0.3b/sapiens_0.3b_coco_best_coco_AP_796_torchscript.pt2"
     input_width: 768
@@ -57,11 +57,17 @@ visualization:
   skeleton_color: [0, 255, 0]  # green
   bbox_color: [255, 0, 0]      # blue
 
-# Stabilizzazione temporale keypoints (filtro One-Euro)
+# Stabilizzazione temporale keypoints (filtro One-Euro + Hold)
 stabilization:
   # Abilita/disabilita stabilizzazione
   enabled: true
+  # Abilita filtro One-Euro per smoothing
+  use_one_euro: true
+  # Abilita hold (mantiene posizione precedente se conf < threshold)
+  use_hold: true
   # Cutoff minimo (più basso = più smooth, meno jitter)
   min_cutoff: 1.5
   # Coefficiente velocità (più alto = più reattivo ai movimenti rapidi)
   beta: 0.01
+  # Decay della confidenza durante hold (0.9-0.99)
+  hold_decay: 0.95
