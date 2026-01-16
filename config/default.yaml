@@ -56,3 +56,12 @@ visualization:
   keypoint_color: [0, 255, 0]  # green
   skeleton_color: [0, 255, 0]  # green
   bbox_color: [255, 0, 0]      # blue
+
+# Stabilizzazione temporale keypoints (filtro One-Euro)
+stabilization:
+  # Abilita/disabilita stabilizzazione
+  enabled: true
+  # Cutoff minimo (più basso = più smooth, meno jitter)
+  min_cutoff: 1.5
+  # Coefficiente velocità (più alto = più reattivo ai movimenti rapidi)
+  beta: 0.01
