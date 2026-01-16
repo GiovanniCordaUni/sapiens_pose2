@@ -17,7 +17,13 @@ from ..io.video_writer import VideoWriter, create_overlay_writer
 from ..io.jsonl_writer import JsonlWriter, create_pose_record, keypoints_to_list
 from ..viz.draw import draw_pose_overlay
 from ..detection.person_detector import clamp_box_xyxy, add_padding_xyxy
+from ..filters.one_euro_filter import KeypointStabilizer
 
+# Exponential moving average per stabilizzare i bounding box sulla persona
+def ema_box(prev: list[float] | None, curr: list[float], alpha: float = 0.2) -> list[float]:
+    if prev is None:
+        return [float(x) for x in curr]
+    return [(1 - alpha) * float(prev[i]) + alpha * float(curr[i]) for i in range(4)]
 
 def run_pose_pipeline(
     video_path: str | Path,
@@ -35,6 +41,9 @@ def run_pose_pipeline(
     skeleton_color: tuple[int, int, int] = (0, 255, 0),
     bbox_color: tuple[int, int, int] = (255, 0, 0),
     show_progress: bool = True,
+    stabilize_keypoints: bool = True,
+    stabilizer_min_cutoff: float = 1.5,
+    stabilizer_beta: float = 0.01,
 ) -> dict[str, Any]:
     """
     Esegue la pipeline completa di stima della posa su un video.
@@ -55,6 +64,9 @@ def run_pose_pipeline(
         skeleton_color: Colore BGR per lo scheletro
         bbox_color: Colore BGR per il bounding box
         show_progress: Mostra la barra di progresso
+        stabilize_keypoints: Abilita filtro One-Euro per stabilizzare i keypoints
+        stabilizer_min_cutoff: Cutoff minimo del filtro (più basso = più smooth)
+        stabilizer_beta: Reattività ai movimenti rapidi (più alto = più reattivo)
         
     Returns:
         Dizionario con le statistiche della pipeline
@@ -76,6 +88,15 @@ def run_pose_pipeline(
     }
     
     prev_box = None
+    
+    # Inizializza stabilizzatore keypoints se abilitato
+    stabilizer = None
+    if stabilize_keypoints:
+        stabilizer = KeypointStabilizer(
+            num_keypoints=len(keypoint_indices),
+            min_cutoff=stabilizer_min_cutoff,
+            beta=stabilizer_beta,
+        )
     
     with VideoReader(video_path) as reader:
         W, H = reader.width, reader.height
@@ -126,11 +147,13 @@ def run_pose_pipeline(
                         writer.write(frame)
                         stats["frames_no_person"] += 1
                         continue
-                    
-                    # Aggiorna il box di tracciamento e applica il padding
-                    prev_box = box_xyxy
-                    box_xyxy = clamp_box_xyxy(box_xyxy, W, H)
-                    box_xyxy = add_padding_xyxy(box_xyxy, W, H, padding_ratio=box_padding)
+
+                    smooth_box = ema_box(prev_box, box_xyxy, alpha=0.2)
+
+                    prev_box = smooth_box
+
+                    box_xyxy = clamp_box_xyxy(smooth_box, W, H)
+                    # box_xyxy = add_padding_xyxy(box_xyxy, W, H, padding_ratio=box_padding) # opzionale se si vuole padding sul box persona
                     x1, y1, x2, y2 = box_xyxy
                     
                     # Ritaglia la persona
@@ -154,6 +177,13 @@ def run_pose_pipeline(
                         box_xyxy,
                         keypoint_indices=keypoint_indices,
                     )
+                    
+                    # Applica stabilizzazione temporale se abilitata
+                    if stabilizer is not None:
+                        timestamp = frame_idx / fps
+                        keypoints, scores = stabilizer.filter(
+                            keypoints, scores, timestamp, keypoint_threshold
+                        )
                     
                     # Disegna l'overlay
                     vis = draw_pose_overlay(
