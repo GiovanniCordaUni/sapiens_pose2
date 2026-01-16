@@ -23,6 +23,7 @@ ENV/
 .idea/
 *.swp
 *.swo
+.history/
 
 # Jupyter
 .ipynb_checkpoints/
