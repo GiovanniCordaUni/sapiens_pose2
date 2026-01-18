@@ -13,14 +13,40 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from sklearn.cluster import KMeans
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Indici COCO-17 per il torso
-LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
-LEFT_HIP, RIGHT_HIP = 11, 12
-TORSO_INDICES = [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP]
+# Indici COCO-17
+KEYPOINT_NAMES = [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle"
+]
+
+# Pesi per keypoint (parti piu mobili hanno peso maggiore)
+# Arti inferiori e superiori pesano di piu del torso/testa
+KEYPOINT_WEIGHTS = {
+    0: 0.0,   # nose
+    1: 0.0,   # left_eye
+    2: 0.0,   # right_eye
+    3: 0.0,   # left_ear
+    4: 0.0,   # right_ear
+    5: 0.7,   # left_shoulder
+    6: 0.7,   # right_shoulder
+    7: 0.8,   # left_elbow
+    8: 0.8,   # right_elbow
+    9: 1.0,   # left_wrist
+    10: 1.0,  # right_wrist
+    11: 0.7,  # left_hip
+    12: 0.7,  # right_hip
+    13: 0.7,  # left_knee
+    14: 0.7,  # right_knee
+    15: 0.7,  # left_ankle
+    16: 0.7,  # right_ankle
+}
 
 
 def carica_jsonl(path: Path) -> list[dict]:
@@ -35,13 +61,41 @@ def carica_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+def calcola_scala_corpo(kpts: list, conf_th: float) -> float:
+    """
+    Calcola scala del corpo per normalizzazione.
+    Usa la diagonale del bounding box dei keypoints validi.
+    """
+    valid_pts = []
+    for i, kpt in enumerate(kpts):
+        if len(kpt) >= 3 and kpt[2] >= conf_th:
+            valid_pts.append([kpt[0], kpt[1]])
+    
+    if len(valid_pts) < 2:
+        return 1.0
+    
+    pts = np.array(valid_pts)
+    min_xy = pts.min(axis=0)
+    max_xy = pts.max(axis=0)
+    diag = np.linalg.norm(max_xy - min_xy)
+    
+    return max(diag, 1.0)
+
+
 def calcola_segnale_movimento(
     records: list[dict],
-    conf_th: float = 0.4,
+    conf_th: float = 0.25,
     smooth_window: int = 5,
+    use_weights: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Calcola segnale di movimento normalizzato.
+    Calcola segnale di movimento normalizzato usando TUTTI i keypoints.
+    
+    Logica:
+    1. Per ogni frame, calcola lo spostamento di ogni keypoint valido
+    2. Aggrega con media pesata (parti mobili pesano di piu)
+    3. Normalizza per dimensione corpo (diagonale bbox keypoints)
+    4. Applica smoothing per ridurre rumore di movimenti casuali
     
     Returns:
         (timestamps, movimento_smooth)
@@ -62,49 +116,56 @@ def calcola_segnale_movimento(
     t = np.array([r["time_sec"] for r in usable])
     m = np.zeros(len(usable))
     
-    prev_pts = {}
+    prev_kpts = None
+    prev_confs = None
     
     for i, r in enumerate(usable):
         kpts = r["keypoints17"]
+        num_kpts = len(kpts)
         
-        # Estrai keypoints torso
-        curr = {}
-        for idx in TORSO_INDICES:
-            if idx < len(kpts) and len(kpts[idx]) >= 3:
-                curr[idx] = kpts[idx]
+        # Estrai coordinate e confidenze
+        curr_kpts = np.zeros((num_kpts, 2))
+        curr_confs = np.zeros(num_kpts)
         
+        for j, kpt in enumerate(kpts):
+            # se kpt ha almeno x,y,conf
+            if len(kpt) >= 3:
+                curr_kpts[j] = [kpt[0], kpt[1]]
+                curr_confs[j] = kpt[2]
+        
+        # Primo frame -> inizializza prev
         if i == 0:
-            prev_pts = curr
+            prev_kpts = curr_kpts.copy()
+            prev_confs = curr_confs.copy()
             continue
         
-        # Calcola spostamenti
-        dists = []
-        for idx, (x, y, c) in curr.items():
-            if idx in prev_pts:
-                px, py, pc = prev_pts[idx]
-                if c >= conf_th and pc >= conf_th:
-                    dists.append(np.sqrt((x - px)**2 + (y - py)**2))
+        # Calcola spostamenti pesati per ogni keypoint
+        displacements = []
+        weights = []
         
-        prev_pts = curr
+        for j in range(num_kpts):
+            # Entrambi i frame devono avere confidenza sufficiente
+            if curr_confs[j] >= conf_th and prev_confs[j] >= conf_th:
+                dist = np.linalg.norm(curr_kpts[j] - prev_kpts[j])
+                w = KEYPOINT_WEIGHTS.get(j, 0.5) if use_weights else 1.0
+                displacements.append(dist)
+                weights.append(w)
         
-        if not dists:
+        # Aggiorna prev
+        prev_kpts = curr_kpts.copy()
+        prev_confs = curr_confs.copy()
+        
+        if not displacements: # Nessun keypoint valido
             m[i] = m[i-1] if i > 0 else 0
             continue
         
-        disp = np.median(dists)
+        # Media pesata degli spostamenti
+        displacements = np.array(displacements)
+        weights = np.array(weights)
+        disp = np.sum(displacements * weights) / np.sum(weights)
         
-        # Normalizza per lunghezza torso
-        scale = 1.0
-        if all(idx in curr for idx in TORSO_INDICES):
-            ls, rs = curr[LEFT_SHOULDER], curr[RIGHT_SHOULDER]
-            lh, rh = curr[LEFT_HIP], curr[RIGHT_HIP]
-            if all(p[2] >= conf_th for p in [ls, rs, lh, rh]):
-                mid_sh = np.array([(ls[0]+rs[0])/2, (ls[1]+rs[1])/2])
-                mid_hp = np.array([(lh[0]+rh[0])/2, (lh[1]+rh[1])/2])
-                torso = np.linalg.norm(mid_sh - mid_hp)
-                if torso > 1:
-                    scale = torso
-        
+        # Normalizza per scala corpo
+        scale = calcola_scala_corpo(kpts, conf_th)
         m[i] = disp / scale
     
     # Smooth con moving average
@@ -114,25 +175,26 @@ def calcola_segnale_movimento(
     
     return t, m
 
-
 def rileva_intervalli(
     t: np.ndarray,
     m: np.ndarray,
-    soglia_on: float = 0.07,
-    soglia_off: float = 0.015,
+    soglia_on: float = 0.02,
+    soglia_off: float = 0.008,
     min_frames: int = 3,
+    merge_gap: float = 1.0,   # parametro per unire intervalli vicini
+    min_duration: float = 1.0 # Durata minima del blocco UNITO finale
 ) -> list[tuple[float, float]]:
     """
-    Rileva intervalli di movimento con isteresi.
-    
-    Returns:
-        Lista di tuple (inizio, fine) in secondi
+    Rileva, unisce intervalli vicini e filtra quelli troppo brevi.
+    Gestisce sia ripetizioni veloci che rumore isolato.
     """
     n = len(m)
+    raw_intervals = []
+    
+    # rilevamento intervalli base (grezzi)
     in_movimento = False
     above_count = below_count = 0
     start_idx = None
-    intervalli = []
     
     for i in range(n):
         if not in_movimento:
@@ -147,15 +209,141 @@ def rileva_intervalli(
                 in_movimento = False
                 end_idx = i - min_frames + 1
                 if start_idx is not None and end_idx > start_idx:
-                    intervalli.append((t[start_idx], t[end_idx]))
+                    raw_intervals.append((t[start_idx], t[end_idx]))
                 start_idx = None
                 above_count = 0
     
-    # Chiudi intervallo se ancora in movimento
     if in_movimento and start_idx is not None:
-        intervalli.append((t[start_idx], t[-1]))
+        raw_intervals.append((t[start_idx], t[-1]))
+
+    if not raw_intervals:
+        return []
+
     
-    return intervalli
+    # Unisce intervalli se la pausa tra loro è < merge_gap
+    merged_intervals = [raw_intervals[0]]
+    
+    for curr_start, curr_end in raw_intervals[1:]:
+        last_start, last_end = merged_intervals[-1]
+        
+        # Calcola il buco temporale tra la fine del precedente e l'inizio del corrente
+        gap = curr_start - last_end
+        
+        if gap <= merge_gap:
+            # caso di unione fra intervalli
+            merged_intervals[-1] = (last_start, curr_end)
+        else:
+            # se Il buco è troppo grande, è un altro evento (o rumore)
+            merged_intervals.append((curr_start, curr_end))
+
+    
+    # pulisce intervalli troppo brevi dopo l'unione, causati da movimenti isolati non facenti parte
+    # di un esercizio (es. un movimento casuale alla fine)
+    final_intervals = []
+    for start, end in merged_intervals:
+        duration = end - start
+        if duration >= min_duration:
+            final_intervals.append((start, end))
+            
+    return final_intervals
+
+"""
+    Sono stati testati diversi metodi per il calcolo automatico delle soglie
+    basati sulla distribuzione del segnale di movimento.
+    I metodi includono percentili, Otsu e K-Means.
+
+    a scelta si possono decommentare le funzioni corrispondenti e usarle commentando
+    la funzione attualmente in uso.
+
+    NOTA: k-means sembra dare i risultati più stabili e affidabili considerando la variabilità degli esercizi
+"""
+# def calcola_soglie_automatiche(m: np.ndarray) -> tuple[float, float]:
+#     """
+#     Calcola soglie automatiche basate sulla distribuzione del segnale.
+    
+#     Usa percentili per adattarsi al tipo di esercizio.
+#     """
+#     # Rimuovi valori nulli/iniziali
+#     m_valid = m[m > 0]
+#     if len(m_valid) < 10:
+#         return 0.02, 0.008
+    
+#     # Soglia ON: percentile 60-70 (sopra la mediana)
+#     soglia_on = np.percentile(m_valid, 60)
+    
+#     # Soglia OFF: percentile 20-30 (sotto la mediana)
+#     soglia_off = np.percentile(m_valid, 35)
+    
+#     # Assicura che ON > OFF con margine
+#     if soglia_on <= soglia_off:
+#         soglia_on = soglia_off * 1.5
+    
+#     return float(soglia_on), float(soglia_off)
+
+# def calcola_soglie_automatiche(m: np.ndarray) -> tuple[float, float]:
+#     """
+#     Calcola soglie automatiche con metodo Otsu.
+#     Trova la soglia che meglio separa movimento da fermo.
+#     """
+#     m_valid = m[m > 0]
+#     if len(m_valid) < 10:
+#         return 0.02, 0.008
+    
+#     # Normalizza a 0-255 per Otsu
+#     m_min, m_max = m_valid.min(), m_valid.max()
+#     if m_max - m_min < 1e-6:
+#         return 0.02, 0.008
+    
+#     m_norm = ((m_valid - m_min) / (m_max - m_min) * 255).astype(np.uint8)
+    
+#     # Istogramma
+#     hist, _ = np.histogram(m_norm, bins=256, range=(0, 256))
+#     hist = hist.astype(float) / hist.sum()
+    
+#     # Trova soglia ottimale Otsu
+#     best_thresh, best_var = 0, 0
+#     for t in range(1, 255):
+#         w0, w1 = hist[:t].sum(), hist[t:].sum()
+#         if w0 == 0 or w1 == 0:
+#             continue
+#         m0 = (np.arange(t) * hist[:t]).sum() / w0
+#         m1 = (np.arange(t, 256) * hist[t:]).sum() / w1
+#         var = w0 * w1 * (m0 - m1) ** 2
+#         if var > best_var:
+#             best_var, best_thresh = var, t
+    
+#     # Converti a scala originale
+#     soglia_otsu = m_min + (best_thresh / 255) * (m_max - m_min)
+#     soglia_on = soglia_otsu * 0.8
+#     soglia_off = soglia_on * 0.4
+    
+#     return float(soglia_on), float(soglia_off)
+
+
+def calcola_soglie_automatiche(m: np.ndarray) -> tuple[float, float]:
+    """
+    Metodo K-Means: Divide i valori di movimento in 2 cluster
+    (Fermo vs Mosso) e prende il punto medio tra i centroidi.
+    """
+    m_valid = m[m > 0].reshape(-1, 1)
+    if len(m_valid) < 10: return 0.02, 0.008
+
+    # Clustering in 2 gruppi
+    kmeans = KMeans(n_clusters=2, random_state=0, n_init=10).fit(m_valid)
+    
+    # Centroidi dei due gruppi
+    centers = sorted(kmeans.cluster_centers_.flatten())
+    low_center = centers[0]  # Centro del gruppo "fermo"
+    high_center = centers[1] # Centro del gruppo "mosso"
+    
+    # Tuning per il tuo caso specifico:
+    # Spesso K-means mette la soglia troppo alta se il movimento è esplosivo.
+    # Prendo un punto in percentuale della distanza tra Low e High
+    soglia_on = low_center + 0.4 * (high_center - low_center)
+    
+    soglia_off = soglia_on * 0.5
+    
+    return float(soglia_on), float(soglia_off)
 
 
 def genera_grafici(
@@ -171,11 +359,11 @@ def genera_grafici(
     
     # Segnale movimento
     ax1.plot(t, m, 'b-', linewidth=1)
-    ax1.axhline(soglia_on, color='g', linestyle='--', alpha=0.7, label=f'ON={soglia_on}')
-    ax1.axhline(soglia_off, color='r', linestyle='--', alpha=0.7, label=f'OFF={soglia_off}')
+    ax1.axhline(soglia_on, color='g', linestyle='--', alpha=0.7, label=f'ON={soglia_on:.4f}')
+    ax1.axhline(soglia_off, color='r', linestyle='--', alpha=0.7, label=f'OFF={soglia_off:.4f}')
     ax1.set_ylabel("Movimento (norm.)")
     ax1.legend(loc='upper right')
-    ax1.set_title("Analisi Movimento")
+    ax1.set_title("Analisi Movimento (tutti i keypoints)")
     
     # Stato binario
     state = np.zeros(len(t))
@@ -200,10 +388,12 @@ def processa_file(
     output_dir: Path,
     conf_th: float,
     smooth_window: int,
-    soglia_on: float,
-    soglia_off: float,
+    soglia_on: float | None,
+    soglia_off: float | None,
     min_frames: int,
     salva_grafici: bool,
+    use_weights: bool,
+    auto_threshold: bool,
 ) -> dict | None:
     """Processa un singolo file JSONL."""
     print(f"\n[FILE] Elaborazione: {input_path.name}")
@@ -214,9 +404,25 @@ def processa_file(
             print("  [WARN] Nessun record trovato")
             return None
         
-        t, m = calcola_segnale_movimento(records, conf_th, smooth_window)
-        intervalli = rileva_intervalli(t, m, soglia_on, soglia_off, min_frames)
+        t, m = calcola_segnale_movimento(records, conf_th, smooth_window, use_weights)
         
+        # Soglie automatiche se richiesto
+        if auto_threshold or soglia_on is None or soglia_off is None:
+            soglia_on_auto, soglia_off_auto = calcola_soglie_automatiche(m)
+            if auto_threshold:
+                soglia_on = soglia_on_auto
+                soglia_off = soglia_off_auto
+                print(f"  [INFO] Soglie automatiche: ON={soglia_on:.4f}, OFF={soglia_off:.4f}")
+        
+    
+        intervalli = rileva_intervalli(
+            t, m, 
+            soglia_on, soglia_off, 
+            min_frames,
+            merge_gap=1.5,      # Unisce ripetizioni se pausa < 1.5s (gestisce bene 5xSTS)
+            min_duration=2.0    # Ignora blocchi isolati < 2.0s (cancella il rumore finale)
+        )
+
     except Exception as e:
         print(f"  [ERROR] {e}")
         return None
@@ -231,6 +437,8 @@ def processa_file(
         "tempo_movimento_sec": round(tempo_movimento, 2),
         "percentuale_movimento": round(tempo_movimento / durata_totale * 100, 1) if durata_totale > 0 else 0,
         "num_intervalli": len(intervalli),
+        "soglia_on": round(soglia_on, 4),
+        "soglia_off": round(soglia_off, 4),
         "intervalli": [{"inizio": round(a, 2), "fine": round(b, 2), "durata": round(b-a, 2)} 
                        for a, b in intervalli],
     }
@@ -264,20 +472,26 @@ def main():
     parser.add_argument("--input", "-i", required=True, help="File JSONL o cartella")
     parser.add_argument("--output", "-o", default=None, help="Cartella output")
     parser.add_argument("--batch", action="store_true", help="Processa tutti i .jsonl")
-    parser.add_argument("--conf_th", type=float, default=0.4, help="Soglia confidenza keypoints")
+    parser.add_argument("--conf_th", type=float, default=0.25, help="Soglia confidenza keypoints")
     parser.add_argument("--smooth", type=int, default=5, help="Finestra smoothing")
-    parser.add_argument("--ton", type=float, default=1, help="Soglia inizio movimento")
-    parser.add_argument("--toff", type=float, default=0.015, help="Soglia fine movimento")
+    parser.add_argument("--ton", type=float, default=None, help="Soglia inizio movimento (auto se non specificata)")
+    parser.add_argument("--toff", type=float, default=None, help="Soglia fine movimento (auto se non specificata)")
+    parser.add_argument("--auto_threshold", action="store_true", help="Calcola soglie automaticamente")
     parser.add_argument("--min_frames", type=int, default=3, help="Frame consecutivi per cambio stato")
+    parser.add_argument("--no_weights", action="store_true", help="Non usare pesi per keypoint")
     parser.add_argument("--no_grafici", action="store_true", help="Non generare grafici")
     
     args = parser.parse_args()
     
     input_path = Path(args.input)
-    output_dir = Path(args.output) if args.output else (
-        input_path.parent / "analisi_movimento" if input_path.is_file() 
-        else input_path / "analisi_movimento"
-    )
+    # Output directory di default
+    if args.output:
+        output_dir = Path(args.output)
+    else:
+        # Default: data/output/test_tempi nella root del progetto
+        script_dir = Path(__file__).parent
+        project_root = script_dir.parent
+        output_dir = project_root / "data" / "output" / "test_tempi"
     
     # Trova file da processare
     if args.batch or input_path.is_dir():
@@ -289,20 +503,28 @@ def main():
         print(f"[ERROR] Nessun file .jsonl trovato in {input_path}")
         return
     
-    print("=" * 60)
+    # Se non specificate soglie, usa auto
+    auto_threshold = args.auto_threshold or (args.ton is None and args.toff is None)
+    soglia_on = args.ton if args.ton is not None else 0.02
+    soglia_off = args.toff if args.toff is not None else 0.008
+    
+    print("=" * 60) 
     print("ANALISI MOVIMENTO")
     print("=" * 60)
     print(f"[CONFIG] File da elaborare: {len(files)}")
     print(f"[CONFIG] Output: {output_dir}")
-    print(f"[CONFIG] Soglie: ON={args.ton}, OFF={args.toff}")
+    print(f"[CONFIG] Soglie: {'AUTO' if auto_threshold else f'ON={soglia_on}, OFF={soglia_off}'}")
+    print(f"[CONFIG] Pesi keypoint: {'NO' if args.no_weights else 'SI'}")
     
     risultati = []
     for file_path in files:
         r = processa_file(
             file_path, output_dir,
             args.conf_th, args.smooth,
-            args.ton, args.toff, args.min_frames,
+            soglia_on, soglia_off, args.min_frames,
             not args.no_grafici,
+            not args.no_weights,
+            auto_threshold,
         )
         if r:
             risultati.append(r)

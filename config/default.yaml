@@ -47,7 +47,7 @@ processing:
 # visualizzazione
 visualization:
   # Keypoint confidence threshold per il disegno dello scheletro
-  keypoint_threshold: 0.35
+  keypoint_threshold: 0.2
   # Raggio del cerchio per i keypoint
   keypoint_radius: 5
   # Spessore della linea per lo scheletro

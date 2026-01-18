@@ -14,15 +14,13 @@ Pipeline per la stima della posa umana da video di esercizi di fisiologia.
 - Estrazione automatica del soggetto dal path
 - Configurazione via YAML
 - Struttura modulare
+- **Stabilizzazione keypoints** con One Euro Filter e Hold (riduzione jitter)
+- **Analisi del movimento** con rilevamento automatico intervalli
 
 ## Installazione
 
 ```bash
-# Crea ambiente conda
-conda create -n sapiens-pose python=3.11
-conda activate sapiens-pose
-
-# Installa dipendenze
+# Crea ambiente virtuale e installa le dipendenze con
 pip install -r requirements.txt
 ```
 
@@ -53,6 +51,83 @@ Elabora tutti i video in `data/input/videos/soggettoNNN/*.mp4`
 --skip-existing     # Salta video già elaborati
 --device cuda       # Forza GPU (default: auto)
 ```
+---
+
+## Analisi del Movimento
+
+Lo script `scripts/run_motion_analysis.py` analizza i file JSONL prodotti dalla pose estimation per rilevare intervalli di movimento e calcolare tempi di esecuzione degli esercizi.
+
+### Funzionalità
+
+- **Calcolo segnale di movimento**: Aggregazione pesata degli spostamenti di tutti i keypoints
+- **Normalizzazione**: Per dimensione del corpo (diagonale bounding box)
+- **Rilevamento intervalli**: Con isteresi (soglia ON/OFF) e logica di merge
+- **Soglie automatiche**: Metodo K-Means per separare "fermo" da "in movimento"
+- **Generazione grafici**: Visualizzazione segnale + intervalli rilevati
+
+### Utilizzo
+
+```bash
+# Singolo file
+python scripts/run_motion_analysis.py --input file.jsonl
+
+# Cartella batch
+python scripts/run_motion_analysis.py --input cartella/ --batch
+
+# Con soglie automatiche (consigliato)
+python scripts/run_motion_analysis.py --input file.jsonl --auto_threshold
+```
+
+### Opzioni
+
+| Opzione | Default | Descrizione |
+|---------|---------|-------------|
+| `--input`, `-i` | - | File JSONL o cartella (required) |
+| `--output`, `-o` | `data/output/test_tempi` | Cartella output |
+| `--batch` | False | Processa tutti i .jsonl nella cartella |
+| `--conf_th` | 0.25 | Soglia confidenza keypoints |
+| `--smooth` | 5 | Finestra smoothing (moving average) |
+| `--ton` | auto | Soglia inizio movimento |
+| `--toff` | auto | Soglia fine movimento |
+| `--auto_threshold` | False | Calcola soglie automaticamente (K-Means) |
+| `--min_frames` | 3 | Frame consecutivi per cambio stato |
+| `--no_weights` | False | Non usare pesi per keypoint |
+| `--no_grafici` | False | Non generare grafici |
+
+
+### Output
+
+Per ogni file JSONL elaborato, viene creata una cartella con:
+
+```
+data/output/test_tempi/
+└── nome_video/
+    ├── risultato.json    # Statistiche e intervalli
+    └── grafico.png       # Visualizzazione movimento
+```
+
+#### Formato risultato.json
+
+```json
+{
+  "file": "video.jsonl",
+  "durata_totale_sec": 45.2,
+  "tempo_movimento_sec": 28.5,
+  "percentuale_movimento": 63.1,
+  "num_intervalli": 3,
+  "soglia_on": 0.0234,
+  "soglia_off": 0.0117,
+  "intervalli": [
+    {"inizio": 2.5, "fine": 12.3, "durata": 9.8},
+    {"inizio": 15.0, "fine": 25.2, "durata": 10.2},
+    {"inizio": 30.1, "fine": 38.5, "durata": 8.4}
+  ]
+}
+```
+
+### Notebook di Analisi
+
+Il file `motion_analysis.ipynb` permette di eseguire l'analisi batch su tutti i file JSONL di una cartella, utile per processare l'intero dataset di esercizi (es. 4SST, 5xSTS, TUG).
 
 ## Struttura del progetto
 
@@ -62,10 +137,13 @@ sapiens_pose2/
 │   ├── default.yaml          # Configurazione generale
 │   └── keypoints.yaml        # Definizione COCO 17 keypoints
 ├── scripts/
-│   └── run_pose_estimation.py  # Script CLI principale
+│   ├── run_pose_estimation.py  # Script CLI pose estimation
+│   └── run_motion_analysis.py  # Script CLI analisi movimento
 ├── src/
 │   ├── detection/
 │   │   └── person_detector.py  # Utilities bounding box
+│   ├── filters/
+│   │   └── one_euro_filter.py  # Stabilizzazione keypoints
 │   ├── io/
 │   │   ├── jsonl_writer.py     # Output JSONL
 │   │   ├── video_reader.py     # Lettura video
@@ -76,7 +154,7 @@ sapiens_pose2/
 │   ├── pipeline/
 │   │   └── pipeline_video.py   # Orchestrazione pipeline
 │   ├── pose/
-│   │   ├── decode.py           # Decodifica heatmaps
+│   │   ├── decode.py           # Decodifica heatmaps -> keypoints
 │   │   └── preprocess.py       # Preprocessing immagini
 │   └── viz/
 │       └── draw.py             # Disegno skeleton
@@ -84,25 +162,31 @@ sapiens_pose2/
 │   ├── input/videos/
 │   │   └── soggettoNNN/        # Video input per soggetto
 │   └── output/
-│       └── soggettoNNN/        # Output per soggetto
-│           ├── video.jsonl
-│           └── video_overlay.mp4
+│       ├── soggettoNNN/        # Output pose per soggetto
+│       │   ├── video.jsonl
+│       │   └── video_overlay.mp4
+│       └── test_tempi/         # Output analisi movimento
+│           └── nome_video/
+│               ├── risultato.json
+│               └── grafico.png
 ├── weights/
 │   └── yolo/
 │       └── yolov8n.pt          # Pesi YOLO
 ├── sapiens_host/
+│   ├── detector/checkpoints/   # Checkpoint detector
 │   └── pose/checkpoints/
-│       └── sapiens_0.3b/
-│       |    └── sapiens_0.3b_coco_best_coco_AP_796_torchscript.pt2
-|       └── sapiens_0.6b/
-│       |    └── sapiens_0.6b_coco_best_coco_AP_812_torchscript.pt2
-|       └── sapiens_1b/
-│            └── sapiens_1b_coco_best_coco_AP_820_torchscript.pt2
+│       ├── sapiens_0.3b/
+│       │   └── sapiens_0.3b_coco_best_coco_AP_796_torchscript.pt2
+│       ├── sapiens_0.6b/
+│       │   └── sapiens_0.6b_coco_best_coco_AP_812_torchscript.pt2
+│       └── sapiens_1b/
+│           └── sapiens_1b_coco_best_coco_AP_820_torchscript.pt2
+├── motion_analysis.ipynb       # Notebook analisi batch
 ├── requirements.txt
 └── README.md
 ```
 
-## Formato output JSONL
+## Formato output JSONL delle pose
 
 Ogni riga contiene un frame:
 
