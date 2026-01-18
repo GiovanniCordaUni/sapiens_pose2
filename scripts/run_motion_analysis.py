@@ -336,7 +336,6 @@ def calcola_soglie_automatiche(m: np.ndarray) -> tuple[float, float]:
     low_center = centers[0]  # Centro del gruppo "fermo"
     high_center = centers[1] # Centro del gruppo "mosso"
     
-    # Tuning per il tuo caso specifico:
     # Spesso K-means mette la soglia troppo alta se il movimento è esplosivo.
     # Prendo un punto in percentuale della distanza tra Low e High
     soglia_on = low_center + 0.4 * (high_center - low_center)
