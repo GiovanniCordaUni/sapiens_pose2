@@ -34,16 +34,16 @@ KEYPOINT_WEIGHTS = {
     2: 0.0,   # right_eye
     3: 0.0,   # left_ear
     4: 0.0,   # right_ear
-    5: 0.7,   # left_shoulder
-    6: 0.7,   # right_shoulder
+    5: 1.0,   # left_shoulder
+    6: 1.0,   # right_shoulder
     7: 0.8,   # left_elbow
     8: 0.8,   # right_elbow
-    9: 1.0,   # left_wrist
-    10: 1.0,  # right_wrist
-    11: 0.7,  # left_hip
-    12: 0.7,  # right_hip
-    13: 0.7,  # left_knee
-    14: 0.7,  # right_knee
+    9: 0.7,   # left_wrist
+    10: 0.7,  # right_wrist
+    11: 1.0,  # left_hip
+    12: 1.0,  # right_hip
+    13: 0.8,  # left_knee
+    14: 0.8,  # right_knee
     15: 0.7,  # left_ankle
     16: 0.7,  # right_ankle
 }

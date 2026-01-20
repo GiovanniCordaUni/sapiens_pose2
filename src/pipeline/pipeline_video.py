@@ -42,6 +42,7 @@ def run_pose_pipeline(
     skeleton_color: tuple[int, int, int] = (0, 255, 0),
     bbox_color: tuple[int, int, int] = (255, 0, 0),
     show_progress: bool = True,
+    stabilizer_conf_threshold: float = 0.15,
     stabilize_keypoints: bool = True,
     stabilizer_min_cutoff: float = 1.5,
     stabilizer_beta: float = 0.01,
@@ -186,13 +187,34 @@ def run_pose_pipeline(
                         box_xyxy,
                         keypoint_indices=keypoint_indices,
                     )
+
                     
-                    # Applica stabilizzazione temporale se abilitata
+                    
+                    # Applica stabilizzazione temporale se abilitata (in coordinate normalizzate al bbox)
                     if stabilizer is not None:
                         timestamp = frame_idx / fps
-                        keypoints, scores = stabilizer.filter(
-                            keypoints, scores, timestamp, keypoint_threshold
+
+                        # bbox dims (evita divisioni per zero)
+                        bw = float(max(1, x2 - x1))
+                        bh = float(max(1, y2 - y1))
+
+                    # keypoints in [0..1] rispetto al bbox: elimina jitter indotto da bbox variabili
+                        kpts_rel = keypoints.copy()
+                        kpts_rel[:, 0] = (kpts_rel[:, 0] - float(x1)) / bw
+                        kpts_rel[:, 1] = (kpts_rel[:, 1] - float(y1)) / bh
+
+                        # Filtra su coordinate normalizzate con soglia dedicata
+                        kpts_rel_f, scores_f = stabilizer.filter(
+                            kpts_rel, scores, timestamp, stabilizer_conf_threshold
                         )
+
+                        # Riporta in coordinate assolute frame
+                        keypoints = kpts_rel_f.copy()
+                        keypoints[:, 0] = keypoints[:, 0] * bw + float(x1)
+                        keypoints[:, 1] = keypoints[:, 1] * bh + float(y1)
+
+                        scores = scores_f
+
                     
                     # Disegna l'overlay
                     vis = draw_pose_overlay(
